@@ -1,0 +1,390 @@
+outlier = []
+no_outlier = []
+def plot_dist(df, col):
+    fig, axs = plt.subplots(ncols = 2, nrows = 1,figsize = (8, 2))
+
+    # Plot Histogram
+    sns.histplot(df[col], ax = axs[0], bins=30)
+    axs[0].set_title(f"Histogram {col}")
+    axs[0].axvline(df[col].mean(), color = 'red', linestyle = 'dashed', label = 'mean')
+    axs[0].axvline(df[col].median(), color = 'green', linestyle = 'dashed', label = 'median')
+    axs[0].legend()
+
+    # Plot Boxplot
+    sns.boxplot(y=df[col], ax =  axs[1])
+    axs[1].set_title(f"Boxplot {col}")
+
+    plt.show()
+
+    # Print Skewness
+    print('Skewness :', df[col].skew())
+    if -0.1 <= df[col].skew() <= 0.1:
+        print("Column |{}| normal distribution".format(col))
+    elif df[col].skew() > 0.1:
+        print("Column |{}| right skewed".format(col))
+    elif df[col].skew() < -0.1:
+        print("Column |{}| left skewed".format(col))
+
+    # Outlier Detection using IQR
+    Q1 = df[col].quantile(0.25)
+    Q3 = df[col].quantile(0.75)
+    IQR = Q3 - Q1
+    lower_bound = Q1 - 1.5 * IQR
+    upper_bound = Q3 + 1.5 * IQR
+
+    outliers = df[(df[col] < lower_bound) | (df[col] > upper_bound)][col].tolist()
+
+    if outliers:
+        print(f"⚠️ Outliers detected in '{col}': {outliers[:5]}")
+        outlier.append(col)
+    else:
+        print(f"✅ No outliers detected in '{col}'.")
+        no_outlier.append(col)
+    print("========================================================================================")
+
+df = pd.read_csv('/kaggle/input/student-performance-factors/StudentPerformanceFactors.csv')
+
+display(df.head())
+print(f'Rows : {df.shape[0]} x Cols : {df.shape[1]}')
+
+X = df.drop(['Exam_Score'], axis = 1)
+y = df['Exam_Score']
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.2, random_state = 42)
+
+print('Train-set Dimension: ', X_train.shape)
+print('Test-set Dimension: ', X_test.shape)
+
+num_cols = X_train.select_dtypes(include = ['float64', 'int64']).columns.to_list()
+object_cols = X_train.select_dtypes(include = 'object').columns.to_list()
+
+for col in num_cols:
+    plot_dist(X_train, col)
+
+missing_num_cols = X_train[num_cols].isnull().sum()[X_train[num_cols].isnull().sum() > 0].index.to_list()
+missing_object_cols = X_test[object_cols].isnull().sum()[X_test[object_cols].isnull().sum() > 0].index.to_list()
+
+display(missing_num_cols, missing_object_cols)
+
+# Categorical --> Most Frequent
+for col in missing_num_cols:
+    median_value = X_train[col].median()
+    X_train[col] = X_train[col].fillna(median_value)
+    X_test[col] = X_test[col].fillna(median_value)
+
+for col in missing_object_cols:
+    most_freq = X_train[col].value_counts().idxmax()
+    X_train[col] = X_train[col].fillna(most_freq)
+    X_test[col] = X_test[col].fillna(most_freq)
+
+ordinal_mappings = [
+    ['Low', 'Medium', 'High'],  # Teacher_Quality
+    ['Low', 'Medium', 'High'],  # Parental_Involvement
+    ['Low', 'Medium', 'High'],  # Access_to_Resources
+    ['Low', 'Medium', 'High'],  # Motivation_Level
+    ['Low', 'Medium', 'High'],  # Family_Income
+    ['Negative', 'Neutral', 'Positive'],  # Peer_Influence
+    ['High School', 'College', 'Postgraduate']  # Parental_Education_Level
+]
+
+ordinal_cols = ['Teacher_Quality', 'Parental_Involvement', 'Access_to_Resources', 'Motivation_Level', 
+                'Family_Income', 'Peer_Influence', 'Parental_Education_Level']
+ohe_cols = [i for i in object_cols if i not in ordinal_cols]
+scaler_cols = no_outlier
+robust_cols = outlier
+
+transformer = ColumnTransformer(
+    transformers=[
+        ('scaler', StandardScaler(), scaler_cols),
+        ('robust', RobustScaler(), robust_cols),
+        ('ohe', OneHotEncoder(handle_unknown = 'ignore'), ohe_cols),
+        ('ordinal', OrdinalEncoder(categories=ordinal_mappings), ordinal_cols)
+    ])
+
+X_train = transformer.fit_transform(X_train)
+X_test = transformer.transform(X_test)
+
+models = {
+    "Linear Regression": LinearRegression(),
+    "Ridge Regression": Ridge(alpha=1.0),
+    "Lasso Regression": Lasso(alpha=0.1),
+    "ElasticNet": ElasticNet(alpha=0.1, l1_ratio=0.5),
+    "Huber Regressor": HuberRegressor(),
+    "Polynomial Regression (Degree 2)": make_pipeline(PolynomialFeatures(degree=2), LinearRegression()),
+    "SVR": SVR(),
+    "Random Forest": RandomForestRegressor(random_state=42),
+    "Gradient Boosting": GradientBoostingRegressor(random_state=42),
+    "XGBoost": XGBRegressor(objective='reg:squarederror', random_state=42)
+}
+
+kf = KFold(n_splits=5, shuffle=True, random_state=42)
+scoring = "r2"
+
+# Store model names and scores
+model_names = []
+mean_scores = []
+
+# Evaluate models
+for name, model in models.items():
+    scores = cross_val_score(model, X_train, y_train, cv=kf, scoring=scoring)
+    mean_score = scores.mean()
+    
+    print(f"{name} Cross-Validation {scoring} Scores:\n {scores}")
+    print(f"Mean {scoring}: {mean_score}\n")
+    
+    model_names.append(name)
+    mean_scores.append(mean_score)
+
+ridge_model = Ridge()
+
+ridge_params = {
+    "alpha": [0.001, 0.01, 0.1, 1, 5, 10, 20, 100]
+}
+
+ridge_grid = GridSearchCV(ridge_model, ridge_params, cv=5, scoring="r2", n_jobs=-1)
+ridge_grid.fit(X_train, y_train)
+
+print(f"Best Ridge Parameters: {ridge_grid.best_params_}")
+print(f"Best Ridge R² Score: {ridge_grid.best_score_:.4f}")
+
+best_params = ridge_grid.best_params_
+
+best_model_ridge = Ridge()
+best_model_ridge.set_params(**best_params)
+
+best_model_ridge.fit(X_train, y_train)
+
+def model_evaluation(model, X_test, y_test, model_name):
+    y_pred = best_model_ridge.predict(X_test)
+
+    MAE = metrics.mean_absolute_error(y_test, y_pred)
+    MSE = metrics.mean_squared_error(y_test, y_pred)
+    RMSE = np.sqrt(MSE)
+    R2_Score = metrics.r2_score(y_test, y_pred)
+    MAPE = np.mean(np.abs((y_test - y_pred) / y_test)) * 100
+
+    return pd.DataFrame([R2_Score, MAE, RMSE, MAPE],
+                        index=['R2-Score', 'MAE', 'RMSE', 'MAPE'],
+                        columns=[model_name])
+
+model_evaluation(best_model_ridge, X_test, y_test, 'Linear Regression')
+
+joblib.dump(ridge_grid.best_estimator_, "/kaggle/working/ridge_model.pkl")
+joblib.dump(transformer, "/kaggle/working/transformer.pkl")
+
+print("Model saved successfully!")
+
+Unique values in Parental_Involvement: ['Low' 'Medium' 'High']
+Unique values in Access_to_Resources: ['High' 'Medium' 'Low']
+Unique values in Extracurricular_Activities: ['No' 'Yes']
+Unique values in Motivation_Level: ['Low' 'Medium' 'High']
+Unique values in Internet_Access: ['Yes' 'No']
+Unique values in Family_Income: ['Low' 'Medium' 'High']
+Unique values in Teacher_Quality: ['Medium' 'High' 'Low' nan]
+Unique values in School_Type: ['Public' 'Private']
+Unique values in Peer_Influence: ['Positive' 'Negative' 'Neutral']
+Unique values in Learning_Disabilities: ['No' 'Yes']
+Unique values in Parental_Education_Level: ['High School' 'College' 'Postgraduate' nan]
+Unique values in Distance_from_Home: ['Near' 'Moderate' 'Far' nan]
+Unique values in Gender: ['Male' 'Female']
+
+
+========================================================================================================================
+========================================================================================================================
+========================================================================================================================
+========================================================================================================================
+
+VSCODE :
+outlier = []
+no_outlier = []
+def plot_dist(df, col):
+    fig, axs = plt.subplots(ncols = 2, nrows = 1,figsize = (8, 2))
+
+    # Plot Histogram
+    sns.histplot(df[col], ax = axs[0], bins=30)
+    axs[0].set_title(f"Histogram {col}")
+    axs[0].axvline(df[col].mean(), color = 'red', linestyle = 'dashed', label = 'mean')
+    axs[0].axvline(df[col].median(), color = 'green', linestyle = 'dashed', label = 'median')
+    axs[0].legend()
+
+    # Plot Boxplot
+    sns.boxplot(y=df[col], ax =  axs[1])
+    axs[1].set_title(f"Boxplot {col}")
+
+    plt.show()
+
+    # Print Skewness
+    print('Skewness :', df[col].skew())
+    if -0.1 <= df[col].skew() <= 0.1:
+        print("Column |{}| normal distribution".format(col))
+    elif df[col].skew() > 0.1:
+        print("Column |{}| right skewed".format(col))
+    elif df[col].skew() < -0.1:
+        print("Column |{}| left skewed".format(col))
+
+    # Outlier Detection using IQR
+    Q1 = df[col].quantile(0.25)
+    Q3 = df[col].quantile(0.75)
+    IQR = Q3 - Q1
+    lower_bound = Q1 - 1.5 * IQR
+    upper_bound = Q3 + 1.5 * IQR
+
+    outliers = df[(df[col] < lower_bound) | (df[col] > upper_bound)][col].tolist()
+
+    if outliers:
+        print(f"⚠️ Outliers detected in '{col}': {outliers[:5]}")
+        outlier.append(col)
+    else:
+        print(f"✅ No outliers detected in '{col}'.")
+        no_outlier.append(col)
+    print("========================================================================================")
+
+df = pd.read_csv('StudentPerformanceFactors.csv')
+
+display(df.head())
+print(f'Rows : {df.shape[0]} x Cols : {df.shape[1]}')
+
+X = df.drop(['Exam_Score'], axis = 1)
+y = df['Exam_Score']
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.2, random_state = 42)
+
+print('Train-set Dimension: ', X_train.shape)
+print('Test-set Dimension: ', X_test.shape)
+
+num_cols = X_train.select_dtypes(include = ['float64', 'int64']).columns.to_list()
+object_cols = X_train.select_dtypes(include = 'object').columns.to_list()
+
+for col in num_cols:
+    plot_dist(X_train, col)
+
+missing_num_cols = X_train[num_cols].isnull().sum()[X_train[num_cols].isnull().sum() > 0].index.to_list()
+missing_object_cols = X_test[object_cols].isnull().sum()[X_test[object_cols].isnull().sum() > 0].index.to_list()
+
+display(missing_num_cols, missing_object_cols)
+
+# Categorical --> Most Frequent
+for col in missing_num_cols:
+    median_value = X_train[col].median()
+    X_train[col] = X_train[col].fillna(median_value)
+    X_test[col] = X_test[col].fillna(median_value)
+
+for col in missing_object_cols:
+    most_freq = X_train[col].value_counts().idxmax()
+    X_train[col] = X_train[col].fillna(most_freq)
+    X_test[col] = X_test[col].fillna(most_freq)
+
+ordinal_mappings = [
+    ['Low', 'Medium', 'High'],  # Teacher_Quality
+    ['Low', 'Medium', 'High'],  # Parental_Involvement
+    ['Low', 'Medium', 'High'],  # Access_to_Resources
+    ['Low', 'Medium', 'High'],  # Motivation_Level
+    ['Low', 'Medium', 'High'],  # Family_Income
+    ['Negative', 'Neutral', 'Positive'],  # Peer_Influence
+    ['High School', 'College', 'Postgraduate']  # Parental_Education_Level
+]
+
+ordinal_cols = ['Teacher_Quality', 'Parental_Involvement', 'Access_to_Resources', 'Motivation_Level', 
+                'Family_Income', 'Peer_Influence', 'Parental_Education_Level']
+ohe_cols = [i for i in object_cols if i not in ordinal_cols]
+scaler_cols = no_outlier
+robust_cols = outlier
+
+transformer = ColumnTransformer(
+    transformers=[
+        ('scaler', StandardScaler(), scaler_cols),
+        ('robust', RobustScaler(), robust_cols),
+        ('ohe', OneHotEncoder(handle_unknown = 'ignore'), ohe_cols),
+        ('ordinal', OrdinalEncoder(categories=ordinal_mappings), ordinal_cols)
+    ])
+
+X_train = transformer.fit_transform(X_train)
+X_test = transformer.transform(X_test)
+
+models = {
+    "Linear Regression": LinearRegression(),
+    "Ridge Regression": Ridge(alpha=1.0),
+    "Lasso Regression": Lasso(alpha=0.1),
+    "ElasticNet": ElasticNet(alpha=0.1, l1_ratio=0.5),
+    "Huber Regressor": HuberRegressor(),
+    "Polynomial Regression (Degree 2)": make_pipeline(PolynomialFeatures(degree=2), LinearRegression()),
+    "SVR": SVR(),
+    "Random Forest": RandomForestRegressor(random_state=42),
+    "Gradient Boosting": GradientBoostingRegressor(random_state=42),
+    "XGBoost": XGBRegressor(objective='reg:squarederror', random_state=42)
+}
+
+kf = KFold(n_splits=5, shuffle=True, random_state=42)
+scoring = "r2"
+
+# Store model names and scores
+model_names = []
+mean_scores = []
+
+# Evaluate models
+for name, model in models.items():
+    scores = cross_val_score(model, X_train, y_train, cv=kf, scoring=scoring)
+    mean_score = scores.mean()
+    
+    print(f"{name} Cross-Validation {scoring} Scores:\n {scores}")
+    print(f"Mean {scoring}: {mean_score}\n")
+    
+    model_names.append(name)
+    mean_scores.append(mean_score)
+
+ridge_model = Ridge()
+
+ridge_params = {
+    "alpha": [0.001, 0.01, 0.1, 1, 5, 10, 20, 100]
+}
+
+ridge_grid = GridSearchCV(ridge_model, ridge_params, cv=5, scoring="r2", n_jobs=-1)
+ridge_grid.fit(X_train, y_train)
+
+print(f"Best Ridge Parameters: {ridge_grid.best_params_}")
+print(f"Best Ridge R² Score: {ridge_grid.best_score_:.4f}")
+
+best_params = ridge_grid.best_params_
+
+best_model_ridge = Ridge()
+best_model_ridge.set_params(**best_params)
+
+best_model_ridge.fit(X_train, y_train)
+
+def model_evaluation(model, X_test, y_test, model_name):
+    y_pred = best_model_ridge.predict(X_test)
+
+    MAE = metrics.mean_absolute_error(y_test, y_pred)
+    MSE = metrics.mean_squared_error(y_test, y_pred)
+    RMSE = np.sqrt(MSE)
+    R2_Score = metrics.r2_score(y_test, y_pred)
+    MAPE = np.mean(np.abs((y_test - y_pred) / y_test)) * 100
+
+    return pd.DataFrame([R2_Score, MAE, RMSE, MAPE],
+                        index=['R2-Score', 'MAE', 'RMSE', 'MAPE'],
+                        columns=[model_name])
+
+model_evaluation(best_model_ridge, X_test, y_test, 'Linear Regression')
+
+joblib.dump(best_model_ridge, "best_model.pkl")
+joblib.dump(transformer, "transformer_data.pkl")
+print("Model & Transformer saved successfully!")
+
+Unique values in Parental_Involvement: ['Low' 'Medium' 'High']
+Unique values in Access_to_Resources: ['High' 'Medium' 'Low']
+Unique values in Extracurricular_Activities: ['No' 'Yes']
+Unique values in Motivation_Level: ['Low' 'Medium' 'High']
+Unique values in Internet_Access: ['Yes' 'No']
+Unique values in Family_Income: ['Low' 'Medium' 'High']
+Unique values in Teacher_Quality: ['Medium' 'High' 'Low' nan]
+Unique values in School_Type: ['Public' 'Private']
+Unique values in Peer_Influence: ['Positive' 'Negative' 'Neutral']
+Unique values in Learning_Disabilities: ['No' 'Yes']
+Unique values in Parental_Education_Level: ['High School' 'College' 'Postgraduate' nan]
+Unique values in Distance_from_Home: ['Near' 'Moderate' 'Far' nan]
+Unique values in Gender: ['Male' 'Female']
+
+
+
+
+
