@@ -28,9 +28,9 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 ## 💡 Features
-Predicts student performance based on various factors.
-Interactive web interface using Streamlit.
-Model and transformer are preloaded for real-time predictions.
+- Predicts student performance based on various factors.
+- Interactive web interface using Streamlit.
+- Model and transformer are preloaded for real-time predictions.
 
 ## 📦 Tech Stack
 - Python
@@ -41,8 +41,8 @@ Model and transformer are preloaded for real-time predictions.
 
 ## 🧠 Model
 The model was trained in ml-project.ipynb using:
-Data preprocessing pipeline (transformer_data.pkl)
-Final model saved as best_model.pkl
+- Data preprocessing pipeline (transformer_data.pkl)
+- Final model saved as best_model.pkl
 
 ## 📝 License
 This project is open-source and free to use.
